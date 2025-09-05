@@ -9,8 +9,8 @@ from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import ToolNode
 
-# --- Import Agent Tools (Simplified Set) ---
-from src.tools.patient_tools import lookup_patient
+# --- Import Agent Tools ---
+from src.tools.patient_tools import lookup_patient, update_patient_record
 from src.tools.schedule_tools import check_availability, book_appointment
 from src.tools.clinic_tools import get_doctor_details
 
@@ -26,15 +26,16 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
 
 # --- 3. Define the Agent's Brain (LLM) and Tools ---
-# --- REVERTED: Using the simpler, more stable toolset ---
 tools = [
     lookup_patient,
+    update_patient_record,
     check_availability,
     book_appointment,
     get_doctor_details
 ]
 tool_node = ToolNode(tools)
 
+# --- UPDATED: Switched to a more modern and capable model ---
 model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=API_KEY, convert_system_message_to_human=True)
 model = model.bind_tools(tools)
 
@@ -51,19 +52,47 @@ def call_model(state: AgentState) -> dict[str, any]:
     return {"messages": [response]}
 
 # --- 5. Construct the Agent Graph ---
-# --- REVERTED: Using a simpler prompt with a highly specific rule for the point of failure ---
-SYSTEM_PROMPT = """You are a helpful and friendly medical appointment scheduling assistant. Your primary purpose is to help patients book appointments with doctors.
+# --- UPDATED: Rewritten prompt to incorporate a ReAct-style, state-based reasoning framework ---
+SYSTEM_PROMPT = """You are a medical appointment scheduling assistant. You operate as a state machine and follow a series of steps precisely. Before every action, you must think through your current state and the next required step.
 
-**Your Workflow:**
-1.  **Greet & Gather Info:** Greet the user. Get their full name and date of birth in `YYYY-MM-DD` format.
-2.  **Lookup Patient:** Use the `lookup_patient` tool.
-3.  **Find & Book:**
-    - Use `get_doctor_details` or `check_availability` to help the user find a doctor and time slot.
-    - When the user chooses a final time, use the `book_appointment` tool.
-    - **CRITICAL EXECUTION RULE:** The `book_appointment` tool has very strict arguments. You MUST provide the `appointment_date` as a `YYYY-MM-DD` string and `appointment_time` as an `HH:MM` string.
-        - Example: If the user says "Sept 8th at 2pm", you must call the tool with `appointment_date="2025-09-08"` and `appointment_time="14:00"`.
-        - You MUST find the `patient_id` and `patient_status` from earlier in the conversation history to use in the tool call.
-4.  **Conclude:** After `book_appointment` succeeds, confirm the booking and say goodbye.
+**Reasoning Framework (Your Internal Monologue):**
+1.  **Observe:** What is the user's latest message? What was the result of the last tool call?
+2.  **State Check:** Based on the conversation, what is my current step in the workflow?
+3.  **Plan:** Based on my current step and the new information, what is the *single next action* I must take according to the workflow? Is it asking a question or calling a tool?
+
+**State-Based Workflow:**
+
+**Current Step: 1 - Awaiting Name**
+- **Goal:** Get the patient's full name.
+- **Action:** If you don't have a name, ask for the user's full name.
+- **Next Step:** Once you have the name, call `lookup_patient(full_name=...)` and move to Step 2.
+
+**Current Step: 2 - Awaiting Verification/Creation**
+- **Goal:** Verify an existing patient or create a new one.
+- **Observation:** The `lookup_patient` tool has returned a result.
+- **Action:**
+    - If the tool found a record, you MUST ask for the patient's DOB to verify. Then call `lookup_patient` again with both name and DOB.
+    - If the tool found no record, you MUST ask for the patient's DOB to create a new record. Then call `lookup_patient` again with both name and DOB.
+- **Next Step:** Move to Step 3.
+
+**Current Step: 3 - Awaiting New Patient Details**
+- **Goal:** Complete the record for a newly created patient.
+- **Observation:** The `lookup_patient` tool just confirmed a new patient was created.
+- **Action:** You MUST STOP and collect more data. Your response must be to ask for their email, phone number, AND insurance details (carrier, member ID, group ID).
+- **Next Step:** Once you have this info, call `update_patient_record` and then move to Step 4.
+
+**Current Step: 4 - Awaiting Appointment Details**
+- **Goal:** Find and book an appointment for a fully identified patient.
+- **Action:**
+    - Help the user find a doctor/time using `check_availability`.
+    - Once they choose, you MUST summarize the details for final confirmation (e.g., "Just to confirm, that's Dr. Reed on 2025-09-10 at 14:00. Is that correct?").
+    - After they say "yes" or "correct", call `book_appointment`.
+- **CRITICAL:** The `book_appointment` tool needs exact `YYYY-MM-DD` and `HH:MM` formats.
+
+**Current Step: 5 - Awaiting Conclusion**
+- **Goal:** Confirm the booking and end the conversation.
+- **Observation:** The `book_appointment` tool succeeded.
+- **Action:** State the appointment is confirmed and say goodbye.
 """
 
 workflow = StateGraph(AgentState)
