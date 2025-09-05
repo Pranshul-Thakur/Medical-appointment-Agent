@@ -3,10 +3,8 @@ import os
 from langchain_core.tools import tool
 from typing import Optional
 
-# Define the path to the patient data
 PATIENT_DATA_PATH = os.path.join('data', 'patients.csv')
 
-# --- Helper function to load data ---
 def load_patient_data():
     """Loads the patient data from the CSV file."""
     try:
@@ -17,19 +15,6 @@ def load_patient_data():
 
 @tool
 def lookup_patient(full_name: str, dob: Optional[str] = None) -> str:
-    """
-    Looks up a patient by full name and optionally DOB.
-    - If only name is provided, it checks for a record.
-    - If name and DOB are provided, it verifies the patient or creates a new one.
-    This tool provides explicit instructions for the agent's next action.
-
-    Args:
-        full_name: The patient's full name (e.g., "John Doe").
-        dob: The patient's date of birth in YYYY-MM-DD format (optional).
-
-    Returns:
-        A string with the lookup result and a direct command for the agent's next step.
-    """
     print(f"--- Running Patient Lookup for {full_name} ---")
     patients_df = load_patient_data()
     if patients_df is None:
@@ -59,8 +44,6 @@ def lookup_patient(full_name: str, dob: Optional[str] = None) -> str:
             patients_df = pd.concat([patients_df, new_patient], ignore_index=True)
             patients_df.to_csv(PATIENT_DATA_PATH, index=False)
             print(f"New patient created. Total patients: {len(patients_df)}")
-            
-            # --- THE FIX: This is now an explicit command ---
             return f"A new patient record was created with PatientID: {new_patient_id}. CRITICAL: You MUST now ask the user for their email, phone number, and insurance details to complete the record using the `update_patient_record` tool."
     else:
         if not name_match.empty:
@@ -70,21 +53,7 @@ def lookup_patient(full_name: str, dob: Optional[str] = None) -> str:
 
 @tool
 def update_patient_record(patient_id: str, email: str = None, phone_number: str = None, insurance_carrier: str = None, member_id: str = None, group_id: str = None) -> str:
-    """
-    Updates a patient's record with their contact information AND/OR their insurance details.
-    This tool should be used to add information for new patients.
 
-    Args:
-        patient_id: The unique ID of the patient (e.g., "PAT0051").
-        email: The patient's email address.
-        phone_number: The patient's phone number.
-        insurance_carrier: The name of the insurance company.
-        member_id: The patient's insurance member ID.
-        group_id: The patient's insurance group ID.
-
-    Returns:
-        A string confirming that the patient's record has been updated.
-    """
     print(f"--- Running Update Patient Record for {patient_id} ---")
     patients_df = load_patient_data()
     if patients_df is None:

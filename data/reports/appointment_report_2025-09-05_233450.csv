@@ -1,0 +1,4 @@
+Date,StartTime,DoctorName,PatientID,AppointmentType,Duration (min)
+2025-09-08,13:00,Dr Evelyn Reed,PAT0051,Returning Patient,60
+2025-09-10,11:00,Dr Evelyn Reed,PAT0051,Returning Patient,30
+2025-09-11,14:30,Dr Evelyn Reed,PAT0051,Returning Patient,30
