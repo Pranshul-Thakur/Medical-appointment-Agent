@@ -1,52 +1,60 @@
+import streamlit as st
+from langchain_core.messages import HumanMessage, AIMessage
+
+# Import the compiled agent app from our agent.py file
 from src.agent import app
-from langchain_core.messages import HumanMessage
 
 def main():
     """
-    Main function to run the interactive chat loop for the AI agent.
+    Main function to create and run the Streamlit web application.
     """
-    print("\n--- Medical Appointment AI Agent ---")
-    print("Agent is ready. Type 'exit' to end the conversation.")
+    # --- Streamlit Page Configuration ---
+    st.set_page_config(
+        page_title="Medical Appointment AI Agent",
+        page_icon="🤖",
+        layout="centered"
+    )
 
-    # This list will store the entire conversation history.
-    conversation_history = []
+    st.title("Medical Appointment AI Agent 🤖")
+    st.write("Welcome! I can help you book, reschedule, or cancel a medical appointment.")
 
-    # Start an infinite loop for the chat
-    while True:
-        # Get input from the user
-        user_input = input("You: ")
+    # --- Session State Management ---
+    # This is to keep the conversation history persistent across reruns
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-        # Check if the user wants to exit
-        if user_input.lower() == 'exit':
-            print("Ending conversation. Goodbye!")
-            break
+    # Display existing chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message.type):
+            st.markdown(message.content)
 
-        # Append the user's new message to the history
-        conversation_history.append(HumanMessage(content=user_input))
+    # --- Chat Input and Agent Invocation ---
+    if prompt := st.chat_input("How can I help you today?"):
+        # Add user message to session state and display it
+        st.session_state.messages.append(HumanMessage(content=prompt))
+        with st.chat_message("human"):
+            st.markdown(prompt)
 
-        # Invoke the compiled agent graph with the FULL conversation history
-        final_response = None
-        print("Agent: ", end="", flush=True)
-        for chunk in app.stream({"messages": conversation_history}):
-            # The output of the graph is a dictionary of states. We are interested in the 'agent' state.
-            if "agent" in chunk:
-                # The agent's response is in the 'messages' of its state
-                response_messages = chunk["agent"]["messages"]
-                if response_messages:
-                    # The actual content is in the last message
-                    final_response = response_messages[-1]
-                    print(final_response.content, end="", flush=True)
+        # Get the agent's response
+        with st.spinner("Thinking..."):
+            # The 'app' is our compiled LangGraph agent
+            # We pass the entire message history to maintain context
+            response_stream = app.stream({"messages": st.session_state.messages})
+            
+            # Stream the response to the UI
+            with st.chat_message("ai"):
+                full_response = ""
+                message_placeholder = st.empty()
+                for chunk in response_stream:
+                    if "agent" in chunk:
+                        response_content = chunk["agent"]["messages"][-1].content
+                        full_response += response_content
+                        message_placeholder.markdown(full_response + "▌")
+                message_placeholder.markdown(full_response)
         
-        # Add the agent's final response to the history for the next turn
-        if final_response:
-            conversation_history.append(final_response)
-
-        # Print a newline for better formatting after the agent's response
-        print("\n")
+        # Add the full AI response to the session state
+        st.session_state.messages.append(AIMessage(content=full_response))
 
 
 if __name__ == "__main__":
-    # To run the application:
-    # 1. Navigate to the root directory 'ai_medical_scheduler' in your terminal.
-    # 2. Run the command: python -m src.main
     main()
