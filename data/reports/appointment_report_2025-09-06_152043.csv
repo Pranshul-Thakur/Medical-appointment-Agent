@@ -1,0 +1,13 @@
+appointment_date,appointment_time,doctor_name,patient_name,patient_id,duration_minutes
+2025-09-08,09:00,Dr. Ben Carter,Pranshul Thakur,PAT0051,30
+2025-09-08,09:00,Dr. Evelyn Reed,John Rog,PAT0056,30
+2025-09-08,13:30,Dr. Evelyn Reed,Pranshul Thakur,PAT0051,30
+2025-09-08,14:30,Dr. Evelyn Reed,Pranshul Thakur,PAT0051,30
+2025-09-08,16:00,Dr. Evelyn Reed,Jake Gyllenhal,PAT0053,60
+2025-09-09,09:30,Dr. Evelyn Reed,Pranshul Thakur,PAT0051,30
+2025-09-09,10:00,Dr. Evelyn Reed,Pranshul Thakur,PAT0051,30
+2025-09-10,09:00,Dr. Evelyn Reed,Jackie Stewart,PAT0054,60
+2025-09-10,10:00,Dr. Evelyn Reed,Pranshul Thakur,PAT0051,30
+2025-09-10,13:00,Dr. Evelyn Reed,Pranshul Thakur,PAT0051,30
+2025-09-11,09:00,Dr. Evelyn Reed,Pranshul Thakur,PAT0051,30
+2025-09-11,09:30,Dr. Evelyn Reed,Pranshul Thakur,PAT0051,30
