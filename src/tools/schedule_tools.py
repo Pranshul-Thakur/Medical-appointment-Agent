@@ -1,130 +1,152 @@
-import pandas as pd
+import sqlite3
 import os
 from langchain_core.tools import tool
+from typing import Optional
+from dateutil.parser import parse, ParserError
+from datetime import datetime, timedelta
 
-# --- Helper function to load schedule data ---
-def load_schedule_data(file_path):
+DB_PATH = os.path.join("data", "clinic.db")
+
+def db_connect():
+    """Establishes a connection to the SQLite database."""
+    return sqlite3.connect(DB_PATH)
+
+def find_doctor_id_by_name(conn, name_query: str) -> Optional[str]:
     """
-    Loads a doctor's schedule from an Excel file, ensuring Date is a string.
+    Finds a doctor's ID using a forgiving search logic.
     """
-    try:
-        # --- THE FIX: Explicitly define the data types for each column ---
-        # This prevents pandas from auto-converting dates to a different format.
-        dtype_spec = {
-            'Date': str,
-            'StartTime': str,
-            'EndTime': str,
-            'Status': str,
-            'PatientID': str,
-            'AppointmentType': str
-        }
-        return pd.read_excel(file_path, dtype=dtype_spec)
-    except FileNotFoundError:
+    cursor = conn.cursor()
+    # Clean the input query
+    clean_query = name_query.lower().replace("dr.", "").strip()
+    
+    # 1. Try a LIKE search on the full name - this is the most common case
+    cursor.execute("SELECT doctor_id FROM doctors WHERE lower(name) LIKE ?", (f'%{clean_query}%',))
+    result = cursor.fetchone()
+    if result:
+        return result[0]
+        
+    # 2. If that fails, split the query and search for any word in the name
+    words = clean_query.split()
+    if not words:
         return None
-    except Exception as e:
-        print(f"Error loading schedule file {file_path}: {e}")
-        return None
+    
+    like_clauses = " OR ".join(["lower(name) LIKE ?"] * len(words))
+    params = [f'%{word}%' for word in words]
+    
+    cursor.execute(f"SELECT doctor_id FROM doctors WHERE {like_clauses}", params)
+    result = cursor.fetchone()
+    if result:
+        return result[0]
+        
+    return None # Return None if no doctor is found
 
 @tool
-def check_availability(doctor_name: str) -> str:
+def check_availability(doctor_name: str, date: Optional[str] = None) -> str:
     """
     Checks the schedule for a specific doctor to find available appointment slots.
-
-    Args:
-        doctor_name: The full name of the doctor (e.g., "Dr. Evelyn Reed").
-
-    Returns:
-        A string listing available dates and times, or a message if the doctor is not found or has no availability.
     """
     print(f"--- Running Availability Check for {doctor_name} ---")
+    conn = db_connect()
     
-    doctor_name_slug = doctor_name.replace(" ", "_").replace(".", "").lower()
-    file_path = os.path.join("data", "doctor_schedules", f"{doctor_name_slug}_schedule.xlsx")
+    try:
+        doctor_id = find_doctor_id_by_name(conn, doctor_name)
+        if not doctor_id:
+            return f"Doctor '{doctor_name}' not found. Use `get_doctor_details` for a list of doctors."
 
-    schedule_df = load_schedule_data(file_path)
+        cursor = conn.cursor()
+        query = ""
+        params = [doctor_id]
 
-    if schedule_df is None:
-        return f"Schedule for {doctor_name} not found. Please check the name. Available doctors are Dr. Evelyn Reed, Dr. Ben Carter, and Dr. Olivia Chen."
+        if date and date.strip():
+            try:
+                parsed_date = parse(date)
+                query_date_str = parsed_date.strftime("%Y-%m-%d")
+                query = "SELECT start_time FROM availability WHERE doctor_id = ? AND date(start_time) = ? AND is_booked = 0 ORDER BY start_time;"
+                params.append(query_date_str)
+            except (ValueError, ParserError):
+                return "Invalid date format. Please provide a clear date like 'September 8th, 2025'."
+        else:
+            query = "SELECT start_time FROM availability WHERE doctor_id = ? AND is_booked = 0 ORDER BY start_time;"
 
-    available_slots = schedule_df[schedule_df['Status'].str.lower() == 'available']
+        cursor.execute(query, tuple(params))
+        slots = cursor.fetchall()
 
-    if available_slots.empty:
-        return f"No available appointments found for {doctor_name}."
+        if not slots:
+            return f"No available appointments found for {doctor_name}."
 
-    # --- NEW, CLEANER FORMATTING ---
-    availability_str = f"Of course. Here are the available slots for {doctor_name}:\n"
-    # Group by date and list the available times in a structured way
-    for date, group in available_slots.groupby('Date'):
-        # Convert date string to a more readable format if possible
-        try:
-            readable_date = pd.to_datetime(date).strftime('%A, %B %d, %Y')
+        slots_by_date = {}
+        for slot in slots:
+            dt = datetime.strptime(slot[0], "%Y-%m-%d %H:%M")
+            d = dt.strftime("%Y-%m-%d")
+            t = dt.strftime("%H:%M")
+            if d not in slots_by_date: slots_by_date[d] = []
+            slots_by_date[d].append(t)
+
+        availability_str = f"Of course. Here are the available slots for {doctor_name}:\n"
+        for d, times in sorted(slots_by_date.items()):
+            readable_date = datetime.strptime(d, "%Y-%m-%d").strftime('%A, %B %d, %Y')
             availability_str += f"\n--- {readable_date} ---\n"
-        except:
-            availability_str += f"\n--- {date} ---\n"
-        
-        morning_slots = [time for time in group['StartTime'] if int(time.split(':')[0]) < 12]
-        afternoon_slots = [time for time in group['StartTime'] if int(time.split(':')[0]) >= 12]
+            morning_slots = [t for t in times if int(t.split(':')[0]) < 12]
+            afternoon_slots = [t for t in times if int(t.split(':')[0]) >= 12]
+            if morning_slots: availability_str += "Morning:   " + ", ".join(morning_slots) + "\n"
+            if afternoon_slots: availability_str += "Afternoon: " + ", ".join(afternoon_slots) + "\n"
 
-        if morning_slots:
-            availability_str += "Morning:   " + ", ".join(morning_slots) + "\n"
-        if afternoon_slots:
-            availability_str += "Afternoon: " + ", ".join(afternoon_slots) + "\n"
-    
-    return availability_str.strip()
+        return availability_str.strip()
+
+    finally:
+        if conn:
+            conn.close()
 
 @tool
 def book_appointment(doctor_name: str, appointment_date: str, appointment_time: str, patient_id: str, patient_status: str) -> str:
     """
-    Books an appointment for a patient with a specific doctor at a given date and time.
-
-    Args:
-        doctor_name: The full name of the doctor (e.g., "Dr. Evelyn Reed").
-        appointment_date: The date of the appointment in YYYY-MM-DD format.
-        appointment_time: The start time of the appointment in HH:MM format.
-        patient_id: The unique ID of the patient (e.g., "PAT0051").
-        patient_status: The patient's status, either "new patient" or "returning patient".
-
-    Returns:
-        A string confirming the booking or providing an error message.
+    Books an appointment for a patient.
     """
     print(f"--- Running Appointment Booking for {patient_id} with {doctor_name} ---")
-    doctor_name_slug = doctor_name.replace(" ", "_").replace(".", "").lower()
-    file_path = os.path.join("data", "doctor_schedules", f"{doctor_name_slug}_schedule.xlsx")
-
-    schedule_df = load_schedule_data(file_path)
-    if schedule_df is None:
-        return f"Schedule for {doctor_name} not found. Cannot book appointment."
-
-    duration = 60 if "new" in patient_status.lower() else 30
-    appt_type = "New Patient" if duration == 60 else "Returning Patient"
-    num_slots_to_book = 2 if duration == 60 else 1
-
-    # --- MORE ROBUST FIX FOR THE BOOKING BUG ---
-    # Ensure both sides of the comparison are clean strings
-    target_indices = schedule_df[
-        (schedule_df['Date'].str.strip() == appointment_date.strip()) &
-        (schedule_df['StartTime'].str.strip() == appointment_time.strip())
-    ].index
-
-    if target_indices.empty:
-        return f"The requested time slot ({appointment_time} on {appointment_date}) is not available or does not exist."
-
-    start_index = target_indices[0]
     
-    # Check if consecutive slots are available
-    slots_to_update = []
-    for i in range(num_slots_to_book):
-        current_index = start_index + i
-        if current_index >= len(schedule_df) or schedule_df.loc[current_index, 'Status'].lower() != 'available':
-            return f"Cannot book a {duration}-minute appointment at {appointment_time}. Not enough consecutive slots are available."
-        slots_to_update.append(current_index)
+    try:
+        parsed_datetime = parse(f"{appointment_date} {appointment_time}")
+        if parsed_datetime < datetime.now():
+            parsed_datetime = parsed_datetime.replace(year=datetime.now().year + 1)
+        appointment_datetime_str = parsed_datetime.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, ParserError):
+        return "Invalid date or time format provided."
 
-    # Book the slots
-    for index in slots_to_update:
-        schedule_df.loc[index, 'Status'] = 'Booked'
-        schedule_df.loc[index, 'PatientID'] = patient_id
-        schedule_df.loc[index, 'AppointmentType'] = appt_type
+    conn = db_connect()
+    try:
+        doctor_id = find_doctor_id_by_name(conn, doctor_name)
+        if not doctor_id:
+            return f"Doctor '{doctor_name}' not found."
+        
+        cursor = conn.cursor()
+        duration = 60 if "new" in patient_status.lower() else 30
+        
+        cursor.execute("SELECT slot_id FROM availability WHERE doctor_id = ? AND start_time = ? AND is_booked = 0", (doctor_id, appointment_datetime_str))
+        slot = cursor.fetchone()
 
-    schedule_df.to_excel(file_path, index=False)
-    
-    return f"Appointment successfully booked for PatientID {patient_id} with {doctor_name} on {appointment_date} at {appointment_time} for a {duration}-minute ({appt_type}) session."
+        if not slot:
+            return f"The requested time slot ({appointment_datetime_str}) is not available."
+        
+        slot_id_to_book = slot[0]
+        cursor.execute("UPDATE availability SET is_booked = 1 WHERE slot_id = ?", (slot_id_to_book,))
+        
+        if duration == 60:
+            next_slot_time = (parsed_datetime + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M")
+            cursor.execute("SELECT slot_id FROM availability WHERE doctor_id = ? AND start_time = ? AND is_booked = 0", (doctor_id, next_slot_time))
+            next_slot = cursor.fetchone()
+            if not next_slot:
+                conn.rollback()
+                return f"Cannot book a 60-minute appointment. The consecutive slot at {next_slot_time} is not available."
+            cursor.execute("UPDATE availability SET is_booked = 1 WHERE slot_id = ?", (next_slot[0],))
+
+        cursor.execute("INSERT INTO appointments (doctor_id, patient_id, appointment_datetime, duration_minutes) VALUES (?, ?, ?, ?)", (doctor_id, patient_id, appointment_datetime_str, duration))
+        
+        conn.commit()
+        return (f"Appointment successfully booked for PatientID {patient_id}. "
+                f"CRITICAL: Your next and final action MUST be to call the `send_confirmation_with_form` tool to complete the process.")
+
+    except sqlite3.Error as e:
+        if conn: conn.rollback()
+        return f"Database error while booking appointment: {e}"
+    finally:
+        if conn: conn.close()

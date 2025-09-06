@@ -2,17 +2,16 @@ import os
 from dotenv import load_dotenv
 from typing import TypedDict, Annotated
 import operator
-
-# --- LangChain/LangGraph specific imports ---
 from langchain_core.messages import AnyMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import ToolNode
 
-# --- Import Agent Tools ---
+# --- Import All Final Tools ---
 from src.tools.patient_tools import lookup_patient, update_patient_record
 from src.tools.schedule_tools import check_availability, book_appointment
 from src.tools.clinic_tools import get_doctor_details
+from src.tools.communication_tools import send_confirmation_with_form
 
 # --- 1. Load Environment Variables ---
 load_dotenv()
@@ -25,17 +24,17 @@ if not API_KEY:
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
 
-# --- 3. Define the Agent's Brain (LLM) and Tools ---
+# --- 3. Define the Agent's Brain (LLM) and All Tools ---
 tools = [
     lookup_patient,
     update_patient_record,
     check_availability,
     book_appointment,
-    get_doctor_details
+    get_doctor_details,
+    send_confirmation_with_form
 ]
 tool_node = ToolNode(tools)
 
-# --- UPDATED: Switched to a more modern and capable model ---
 model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=API_KEY, convert_system_message_to_human=True)
 model = model.bind_tools(tools)
 
@@ -52,47 +51,39 @@ def call_model(state: AgentState) -> dict[str, any]:
     return {"messages": [response]}
 
 # --- 5. Construct the Agent Graph ---
-# --- UPDATED: Rewritten prompt to incorporate a ReAct-style, state-based reasoning framework ---
-SYSTEM_PROMPT = """You are a medical appointment scheduling assistant. You operate as a state machine and follow a series of steps precisely. Before every action, you must think through your current state and the next required step.
+# --- THE FINAL, ULTRA-STRICT PROMPT ---
+SYSTEM_PROMPT = """You are a medical appointment scheduling assistant. Your ONLY job is to help users book appointments by calling tools in a specific, rigid order. Do not deviate or take shortcuts.
 
-**Reasoning Framework (Your Internal Monologue):**
-1.  **Observe:** What is the user's latest message? What was the result of the last tool call?
-2.  **State Check:** Based on the conversation, what is my current step in the workflow?
-3.  **Plan:** Based on my current step and the new information, what is the *single next action* I must take according to the workflow? Is it asking a question or calling a tool?
+**WORKFLOW: FOLLOW THESE STEPS EXACTLY.**
 
-**State-Based Workflow:**
+**1. GATHER PATIENT INFO:**
+   - Greet the user and ask for their full name and date of birth (DOB).
+   - Once you have BOTH pieces of information, call the `lookup_patient` tool with the `full_name` and `dob`.
 
-**Current Step: 1 - Awaiting Name**
-- **Goal:** Get the patient's full name.
-- **Action:** If you don't have a name, ask for the user's full name.
-- **Next Step:** Once you have the name, call `lookup_patient(full_name=...)` and move to Step 2.
+**2. COMPLETE NEW PATIENT RECORD (if necessary):**
+   - **IF** the `lookup_patient` output indicates a new patient was created:
+     - You MUST STOP. Your immediate next action is to ask for the patient's email, phone number, and insurance details.
+     - After you get this information, call the `update_patient_record` tool.
 
-**Current Step: 2 - Awaiting Verification/Creation**
-- **Goal:** Verify an existing patient or create a new one.
-- **Observation:** The `lookup_patient` tool has returned a result.
-- **Action:**
-    - If the tool found a record, you MUST ask for the patient's DOB to verify. Then call `lookup_patient` again with both name and DOB.
-    - If the tool found no record, you MUST ask for the patient's DOB to create a new record. Then call `lookup_patient` again with both name and DOB.
-- **Next Step:** Move to Step 3.
+**3. FIND APPOINTMENT SLOT:**
+   - Ask the user which doctor they want to see. You can use `get_doctor_details` if they ask for a list.
+   - Then, ask what date they are interested in.
+   - Call the `check_availability` tool with the `doctor_name` and `date`.
 
-**Current Step: 3 - Awaiting New Patient Details**
-- **Goal:** Complete the record for a newly created patient.
-- **Observation:** The `lookup_patient` tool just confirmed a new patient was created.
-- **Action:** You MUST STOP and collect more data. Your response must be to ask for their email, phone number, AND insurance details (carrier, member ID, group ID).
-- **Next Step:** Once you have this info, call `update_patient_record` and then move to Step 4.
+**4. CONFIRM AND BOOK:**
+   - Present the available times from the tool output.
+   - When the user chooses a time, you MUST summarize all details for a final confirmation.
+   - **Example Summary:** "OK. Just to confirm, you want to book an appointment for [Patient Name] with [Doctor Name] on [Date in YYYY-MM-DD] at [Time in HH:MM]. Is that correct?"
+   - **AFTER** the user explicitly says "yes" or "correct" to your summary, call the `book_appointment` tool.
+   - Use the exact, formatted date and time from your summary.
+   - You MUST use the `patient_id` and `patient_status` from the earlier `lookup_patient` tool output.
 
-**Current Step: 4 - Awaiting Appointment Details**
-- **Goal:** Find and book an appointment for a fully identified patient.
-- **Action:**
-    - Help the user find a doctor/time using `check_availability`.
-    - Once they choose, you MUST summarize the details for final confirmation (e.g., "Just to confirm, that's Dr. Reed on 2025-09-10 at 14:00. Is that correct?").
-    - After they say "yes" or "correct", call `book_appointment`.
-- **CRITICAL:** The `book_appointment` tool needs exact `YYYY-MM-DD` and `HH:MM` formats.
+**5. SEND CONFIRMATION EMAIL (MANDATORY FINAL STEP):**
+   - **IF** the `book_appointment` tool succeeds, its output will be a CRITICAL instruction.
+   - Your ONLY next action is to call the `send_confirmation_with_form` tool. You must find all required arguments from the conversation history.
 
-**Current Step: 5 - Awaiting Conclusion**
-- **Goal:** Confirm the booking and end the conversation.
-- **Observation:** The `book_appointment` tool succeeded.
-- **Action:** State the appointment is confirmed and say goodbye.
+**6. CONCLUDE:**
+   - After the `send_confirmation_with_form` tool succeeds, inform the user that a confirmation draft has been created in their Gmail, and then politely say goodbye.
 """
 
 workflow = StateGraph(AgentState)

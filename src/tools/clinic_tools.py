@@ -1,20 +1,38 @@
+import sqlite3
+import os
 from langchain_core.tools import tool
-from src.config import DOCTORS # Import the DOCTORS list from our new config file
+
+DB_PATH = os.path.join("data", "clinic.db")
+
+def db_connect():
+    """Establishes a connection to the SQLite database."""
+    return sqlite3.connect(DB_PATH)
 
 @tool
 def get_doctor_details() -> str:
     """
-    Returns a list of doctors and their specialties. 
-    This tool should be used when the user asks for information about the doctors, 
-    such as who is available or what their specialties are.
+    Retrieves a list of all available doctors and their specialties from the database.
+    This tool is used when the patient wants to know which doctors are available.
     """
-    print("--- Running get_doctor_details tool ---")
-    
-    if not DOCTORS:
-        return "There are currently no doctors listed."
+    print("--- Running get_doctor_details tool (DB Version) ---")
+    conn = db_connect()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT name, specialty FROM doctors ORDER BY name;")
+        doctors = cursor.fetchall()
+        conn.close()
+
+        if not doctors:
+            return "There are currently no doctors available."
+
+        details_str = "Of course. Here is a list of our available doctors and their specialties:\n"
+        for doctor in doctors:
+            details_str += f"- {doctor[0]}, Specialty: {doctor[1]}\n"
         
-    details_list = []
-    for doctor in DOCTORS:
-        details_list.append(f"- {doctor['name']}, Specialty: {doctor['specialty']}")
-        
-    return "Of course. Here are the doctors at our clinic:\n" + "\n".join(details_list)
+        return details_str.strip()
+
+    except sqlite3.Error as e:
+        if conn:
+            conn.close()
+        return f"Database error while fetching doctors: {e}"
