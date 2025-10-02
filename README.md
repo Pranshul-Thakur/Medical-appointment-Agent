@@ -156,25 +156,3 @@ The system automatically generates professional emails for:
 - 1-day final reminders
 
 All emails are drafted in Gmail for review before sending.
-
-## Security Notes
-
-- Store `credentials.json` and `token.json` securely
-- Keep `.env` file private (already in `.gitignore`)
-- Database credentials should be managed separately in production
-- OAuth tokens are stored locally in `token.json`
-
-## Requirements
-
-- Python 3.8+
-- Google API credentials
-- Gmail account for email features
-- Sufficient API quota for Gemini
-
-## Contributing
-
-Contributions are welcome. Please ensure all tools follow the established pattern and maintain the strict workflow logic.
-
-## License
-
-This project is provided as-is for educational and demonstration purposes.
